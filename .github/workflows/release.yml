@@ -1,9 +1,11 @@
 name: Release
 
+# Publishes a release whenever main is pushed with a new version in manifest.json.
+# To ship an update: bump "version" in manifest.json and push.
 on:
   push:
-    tags:
-      - "*"
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,10 +15,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Create release with plugin files
+      - name: Create release for the manifest version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" main.js manifest.json styles.css \
-            --title "${GITHUB_REF_NAME}" \
-            --notes "Galaxy Graph ${GITHUB_REF_NAME}"
+          VERSION=$(jq -r .version manifest.json)
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists, nothing to do."
+            exit 0
+          fi
+          gh release create "$VERSION" main.js manifest.json styles.css \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --notes "Galaxy Graph $VERSION"
