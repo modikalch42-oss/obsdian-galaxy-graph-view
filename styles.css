@@ -1,0 +1,47 @@
+/* ---------- Galaxy Graph ---------- */
+
+/* Deep-space background behind the graph */
+body.galaxy-graph-on .galaxy-graph-host {
+  position: relative;
+  isolation: isolate;
+  background:
+    radial-gradient(ellipse at 50% 50%, #120a2e 0%, #070418 55%, #020109 100%) !important;
+}
+
+.galaxy-starfield {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* Colours Obsidian reads for links, labels, arrows etc. */
+body.galaxy-graph-on .graph-view.color-line { color: rgba(150, 165, 255, 0.22); }
+body.galaxy-graph-on .graph-view.color-line-highlight { color: #d4c2ff; }
+body.galaxy-graph-on .graph-view.color-text { color: #e4e7ff; }
+body.galaxy-graph-on .graph-view.color-arrow { color: #9aa8ff; }
+body.galaxy-graph-on .graph-view.color-circle { color: #ffe9a8; }
+body.galaxy-graph-on .graph-view.color-fill { color: #8ab4ff; }
+body.galaxy-graph-on .graph-view.color-fill-highlight { color: #ffffff; }
+body.galaxy-graph-on .graph-view.color-fill-focused { color: #fff3c4; }
+body.galaxy-graph-on .graph-view.color-fill-tag { color: #ff7ad9; }
+body.galaxy-graph-on .graph-view.color-fill-attachment { color: #ffb36b; }
+body.galaxy-graph-on .graph-view.color-fill-unresolved { color: #565c82; }
+
+/* Soft bloom around nodes */
+body.galaxy-graph-on.galaxy-glow .galaxy-graph-host canvas:not(.galaxy-starfield) {
+  filter:
+    drop-shadow(0 0 2px rgba(200, 180, 255, 0.55))
+    drop-shadow(0 0 7px rgba(110, 150, 255, 0.35));
+}
+
+/* Make the graph controls panel feel like a spaceship HUD */
+body.galaxy-graph-on .galaxy-graph-host .graph-controls {
+  background: rgba(14, 10, 40, 0.72);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(160, 140, 255, 0.25);
+  box-shadow: 0 0 18px rgba(120, 90, 255, 0.18);
+}

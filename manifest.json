@@ -1,0 +1,9 @@
+{
+  "id": "galaxy-graph",
+  "name": "Galaxy Graph",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Turns the graph view into a multicoloured galaxy: coloured star-nodes, a twinkling starfield, nebula clouds, shooting stars and glow.",
+  "author": "Modi",
+  "isDesktopOnly": false
+}
