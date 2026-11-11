@@ -1,47 +1,34 @@
 /* ---------- Galaxy Graph ---------- */
+/* Everything here is static CSS: no animation, no filters, nothing redrawn per frame. */
 
-/* Deep-space background behind the graph */
-body.galaxy-graph-on .galaxy-graph-host {
+body.galaxy-graph-on.galaxy-bg .galaxy-graph-host {
   position: relative;
   isolation: isolate;
-  background:
-    radial-gradient(ellipse at 50% 50%, #120a2e 0%, #070418 55%, #020109 100%) !important;
+  background: radial-gradient(ellipse at center, #1b1a2e 0%, #141322 55%, #0e0d18 100%) !important;
 }
 
-.galaxy-starfield {
+/* a few dim, still stars */
+body.galaxy-graph-on.galaxy-bg-stars .galaxy-graph-host::before {
+  content: "";
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
   z-index: -1;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image:
+    radial-gradient(1px 1px at 12% 18%, rgba(255, 255, 255, 0.55), transparent),
+    radial-gradient(1px 1px at 37% 72%, rgba(220, 225, 255, 0.45), transparent),
+    radial-gradient(1px 1px at 64% 33%, rgba(255, 245, 225, 0.45), transparent),
+    radial-gradient(1px 1px at 81% 81%, rgba(255, 255, 255, 0.4), transparent),
+    radial-gradient(1.5px 1.5px at 90% 12%, rgba(230, 230, 255, 0.5), transparent),
+    radial-gradient(1px 1px at 22% 55%, rgba(255, 255, 255, 0.35), transparent),
+    radial-gradient(1px 1px at 52% 92%, rgba(255, 240, 230, 0.35), transparent);
+  background-size: 340px 340px;
 }
 
-/* Colours Obsidian reads for links, labels, arrows etc. */
-body.galaxy-graph-on .graph-view.color-line { color: rgba(150, 165, 255, 0.22); }
-body.galaxy-graph-on .graph-view.color-line-highlight { color: #d4c2ff; }
-body.galaxy-graph-on .graph-view.color-text { color: #e4e7ff; }
-body.galaxy-graph-on .graph-view.color-arrow { color: #9aa8ff; }
-body.galaxy-graph-on .graph-view.color-circle { color: #ffe9a8; }
-body.galaxy-graph-on .graph-view.color-fill { color: #8ab4ff; }
-body.galaxy-graph-on .graph-view.color-fill-highlight { color: #ffffff; }
-body.galaxy-graph-on .graph-view.color-fill-focused { color: #fff3c4; }
-body.galaxy-graph-on .graph-view.color-fill-tag { color: #ff7ad9; }
-body.galaxy-graph-on .graph-view.color-fill-attachment { color: #ffb36b; }
-body.galaxy-graph-on .graph-view.color-fill-unresolved { color: #565c82; }
-
-/* Soft bloom around nodes */
-body.galaxy-graph-on.galaxy-glow .galaxy-graph-host canvas:not(.galaxy-starfield) {
-  filter:
-    drop-shadow(0 0 2px rgba(200, 180, 255, 0.55))
-    drop-shadow(0 0 7px rgba(110, 150, 255, 0.35));
-}
-
-/* Make the graph controls panel feel like a spaceship HUD */
-body.galaxy-graph-on .galaxy-graph-host .graph-controls {
-  background: rgba(14, 10, 40, 0.72);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(160, 140, 255, 0.25);
-  box-shadow: 0 0 18px rgba(120, 90, 255, 0.18);
-}
+/* gentle colours Obsidian reads for links, labels and highlights */
+body.galaxy-graph-on .graph-view.color-line { color: rgba(170, 175, 220, 0.14); }
+body.galaxy-graph-on .graph-view.color-line-highlight { color: rgba(220, 215, 255, 0.6); }
+body.galaxy-graph-on .graph-view.color-text { color: #d8daf0; }
+body.galaxy-graph-on .graph-view.color-arrow { color: rgba(170, 175, 220, 0.4); }
+body.galaxy-graph-on .graph-view.color-circle { color: #f3e6c8; }

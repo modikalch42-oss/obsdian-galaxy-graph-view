@@ -1,19 +1,26 @@
-/* Galaxy Graph — Obsidian plugin (plain JS, no build step needed) */
-const { Plugin, PluginSettingTab, Setting } = require("obsidian");
+/* Galaxy Graph — Obsidian plugin (plain JS, no build step needed)
+ *
+ * Arranges the global graph into a spiral galaxy:
+ *   - each MOC gets its own spiral arm (and its own colour)
+ *   - notes linked to that MOC sit along its arm, most-connected nearest the core
+ *   - a "MOC of MOCs" (a MOC that links to other MOCs) sits at the galactic core
+ *   - notes that belong to no MOC drift in a faint halo around the disc
+ */
+const { Plugin, PluginSettingTab, Setting, getAllTags, debounce } = require("obsidian");
 
 const DEFAULTS = {
   enabled: true,
-  colorMode: "degree", // degree | folder | rainbow
-  starfield: true,
-  nebula: true,
-  twinkle: true,
-  shootingStars: true,
-  parallax: true,
-  glow: true,
-  starDensity: 1,
+  spiralLayout: true,
+  mocText: "MOC",      // a note whose name contains this is a MOC
+  mocTag: "moc",       // ...or a note with this tag
+  autoHubs: 6,         // if no MOCs are found, use this many of the most-linked notes
+  tightness: 0.45,     // spiral pitch: smaller = more tightly wound arms
+  spacing: 18,         // distance between notes along an arm
+  softBackground: true,
+  backgroundStars: true,
 };
 
-/* ---------- colour helpers ---------- */
+/* ---------- helpers ---------- */
 function hash(str) {
   let h = 2166136261;
   for (let i = 0; i < str.length; i++) {
@@ -22,6 +29,17 @@ function hash(str) {
   }
   return h >>> 0;
 }
+// two deterministic uniform numbers in (0,1) from a string
+function rand2(str) {
+  const a = hash(str), b = hash(str + "#");
+  return [(a + 1) / 4294967297, (b + 1) / 4294967297];
+}
+// deterministic gaussian pair (Box–Muller)
+function gauss2(str) {
+  const [u, v] = rand2(str);
+  const m = Math.sqrt(-2 * Math.log(u));
+  return [m * Math.cos(2 * Math.PI * v), m * Math.sin(2 * Math.PI * v)];
+}
 function hsl(h, s, l) {
   s /= 100; l /= 100;
   const k = (n) => (n + h / 30) % 12;
@@ -29,226 +47,168 @@ function hsl(h, s, l) {
   const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
   return (Math.round(f(0) * 255) << 16) | (Math.round(f(8) * 255) << 8) | Math.round(f(4) * 255);
 }
-function mix(a, b, t) {
-  const r = ((a >> 16) & 255) + (((b >> 16) & 255) - ((a >> 16) & 255)) * t;
-  const g = ((a >> 8) & 255) + (((b >> 8) & 255) - ((a >> 8) & 255)) * t;
-  const bl = (a & 255) + ((b & 255) - (a & 255)) * t;
-  return (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(bl);
-}
-// cool violet outskirts -> blue -> cyan -> pink -> hot white-gold core
-const RAMP = [
-  [0.0, 0x6a4cff],
-  [0.3, 0x3f8cff],
-  [0.55, 0x55e0ff],
-  [0.8, 0xffb8ef],
-  [1.0, 0xfff4d2],
-];
-function ramp(t) {
-  t = Math.max(0, Math.min(1, t));
-  for (let i = 1; i < RAMP.length; i++) {
-    if (t <= RAMP[i][0]) {
-      const [t0, c0] = RAMP[i - 1];
-      const [t1, c1] = RAMP[i];
-      return mix(c0, c1, (t - t0) / (t1 - t0));
+const GOLDEN_ANGLE = 137.508;
+
+const COLOURS = {
+  core: 0xfff1d6,
+  bulge: 0xe6d6b4,
+  field: 0x7d7b98,
+  tag: 0xc29ad3,
+  attachment: 0xd3b08c,
+  unresolved: 0x4c4b63,
+};
+
+/* ---------- galaxy layout ---------- */
+function buildGalaxy(app, s) {
+  const files = app.vault.getMarkdownFiles();
+  const links = app.metadataCache.resolvedLinks || {};
+
+  // undirected neighbour sets + degree
+  const nbrs = new Map();
+  const add = (a, b) => {
+    if (!nbrs.has(a)) nbrs.set(a, new Set());
+    nbrs.get(a).add(b);
+  };
+  for (const src in links) for (const dst in links[src]) {
+    if (src === dst) continue;
+    add(src, dst); add(dst, src);
+  }
+  const deg = (p) => (nbrs.get(p) ? nbrs.get(p).size : 0);
+
+  // --- find MOCs ---
+  const text = (s.mocText || "").trim().toLowerCase();
+  const tag = (s.mocTag || "").trim().replace(/^#/, "").toLowerCase();
+  const isMoc = (f) => {
+    if (text && f.basename.toLowerCase().includes(text)) return true;
+    if (!tag) return false;
+    const cache = app.metadataCache.getFileCache(f);
+    const tags = cache ? getAllTags(cache) || [] : [];
+    return tags.some((t) => {
+      t = t.toLowerCase();
+      return t === "#" + tag || t.startsWith("#" + tag + "/");
+    });
+  };
+  let mocs = files.filter(isMoc).map((f) => f.path);
+  if (mocs.length === 0) {
+    mocs = files.map((f) => f.path)
+      .filter((p) => deg(p) >= 3)
+      .sort((a, b) => deg(b) - deg(a) || a.localeCompare(b))
+      .slice(0, Math.max(1, s.autoHubs));
+  }
+  const mocSet = new Set(mocs);
+
+  // --- core: the MOC that links to the most other MOCs (needs at least 2) ---
+  let core = null, best = 1;
+  for (const m of mocs) {
+    let n = 0;
+    for (const x of nbrs.get(m) || []) if (mocSet.has(x)) n++;
+    if (n > best || (n === best && core && m < core)) { best = n; core = m; }
+  }
+
+  // --- assign every note to a MOC ---
+  const assign = new Map();
+  for (const m of mocs) assign.set(m, m);
+  const sortedMocs = [...mocs].sort();
+  const allPaths = new Set(files.map((f) => f.path));
+  for (const p of nbrs.keys()) allPaths.add(p);
+
+  for (const p of allPaths) {
+    if (assign.has(p)) continue;
+    const cands = sortedMocs.filter((m) => nbrs.get(p) && nbrs.get(p).has(m));
+    if (!cands.length) continue;
+    const nonCore = cands.filter((m) => m !== core);
+    const pool = nonCore.length ? nonCore : cands;
+    // prefer a MOC that actually lists this note
+    const listed = pool.find((m) => links[m] && links[m][p]);
+    assign.set(p, listed || pool[0]);
+  }
+  // second pass: notes one step removed join their neighbours' majority MOC
+  const second = new Map();
+  for (const p of allPaths) {
+    if (assign.has(p)) continue;
+    const count = new Map();
+    for (const q of nbrs.get(p) || []) {
+      const m = assign.get(q);
+      if (m && m !== core) count.set(m, (count.get(m) || 0) + 1);
     }
+    let pick = null, pc = 0;
+    for (const [m, c] of count) if (c > pc || (c === pc && m < pick)) { pick = m; pc = c; }
+    if (pick) second.set(p, pick);
   }
-  return RAMP[RAMP.length - 1][1];
-}
+  for (const [p, m] of second) assign.set(p, m);
 
-/* ---------- starfield ---------- */
-const STAR_COLOURS = ["#ffffff", "#cfe0ff", "#a9c4ff", "#fff1c9", "#ffd2f0", "#c9b8ff"];
-
-function makeSprite(colour) {
-  const c = document.createElement("canvas");
-  c.width = c.height = 32;
-  const g = c.getContext("2d");
-  const grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
-  grad.addColorStop(0, "#ffffff");
-  grad.addColorStop(0.15, colour);
-  grad.addColorStop(0.4, colour + "55");
-  grad.addColorStop(1, colour + "00");
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 32, 32);
-  return c;
-}
-
-class Starfield {
-  constructor(plugin, view) {
-    this.plugin = plugin;
-    this.view = view;
-    this.host = view.contentEl;
-    this.host.addClass("galaxy-graph-host");
-    this.canvas = document.createElement("canvas");
-    this.canvas.addClass("galaxy-starfield");
-    this.host.prepend(this.canvas);
-    this.ctx = this.canvas.getContext("2d");
-    this.sprites = STAR_COLOURS.map(makeSprite);
-    this.shooters = [];
-    this.lastFrame = 0;
-    this.dirty = true;
-    this.lastPan = "";
-
-    this.ro = new ResizeObserver(() => this.resize());
-    this.ro.observe(this.host);
-    this.resize();
-
-    this.loop = this.loop.bind(this);
-    this.raf = requestAnimationFrame(this.loop);
+  // --- group members ---
+  const arms = sortedMocs.filter((m) => m !== core);
+  const members = new Map(arms.map((m) => [m, []]));
+  const bulge = [];
+  for (const [p, m] of assign) {
+    if (p === m) continue;
+    if (m === core) bulge.push(p);
+    else members.get(m).push(p);
   }
+  const byImportance = (a, b) => deg(b) - deg(a) || a.localeCompare(b);
+  bulge.sort(byImportance);
+  for (const list of members.values()) list.sort(byImportance);
 
-  resize() {
-    const dpr = window.devicePixelRatio || 1;
-    const w = this.host.clientWidth, h = this.host.clientHeight;
-    if (!w || !h) return;
-    this.w = w; this.h = h; this.dpr = dpr;
-    this.canvas.width = Math.round(w * dpr);
-    this.canvas.height = Math.round(h * dpr);
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.makeStars();
-    this.makeNebula();
-    this.dirty = true;
-  }
+  // --- positions ---
+  const pos = new Map();
+  const armOf = new Map();   // path -> arm index
+  const along = new Map();   // path -> 0..1 how far out along its arm
+  const sp = s.spacing;
+  const b = s.tightness;
+  const A = Math.max(1, arms.length);
 
-  makeStars() {
-    const s = this.plugin.settings;
-    const count = Math.round(((this.w * this.h) / 2200) * s.starDensity);
-    const seed = { v: 1337 };
-    const rnd = () => ((seed.v = Math.imul(seed.v ^ (seed.v >>> 15), 2246822507) + 0x9e3779b9) >>> 0) / 4294967296;
-    this.stars = [];
-    for (let i = 0; i < count; i++) {
-      const big = rnd() < 0.06;
-      this.stars.push({
-        x: rnd(), y: rnd(),
-        r: big ? 2.5 + rnd() * 3.5 : 0.8 + rnd() * 1.8,
-        a: big ? 0.8 + rnd() * 0.2 : 0.25 + rnd() * 0.6,
-        sp: 0.6 + rnd() * 2.4,
-        ph: rnd() * Math.PI * 2,
-        c: Math.floor(rnd() * this.sprites.length),
-        d: 0.015 + rnd() * 0.08, // parallax depth
-      });
-    }
-  }
+  // bulge: sunflower pattern around the core
+  if (core) pos.set(core, { x: 0, y: 0 });
+  bulge.forEach((p, i) => {
+    const r = sp * 0.75 * Math.sqrt(i + 1);
+    const a = (i + 1) * GOLDEN_ANGLE * Math.PI / 180;
+    pos.set(p, { x: r * Math.cos(a), y: r * Math.sin(a) });
+  });
+  const bulgeR = bulge.length ? sp * 0.75 * Math.sqrt(bulge.length) : 0;
+  const r0 = Math.max(sp * 3 + A * sp * 0.6, bulgeR + sp * 2.5);
 
-  makeNebula() {
-    const c = document.createElement("canvas");
-    c.width = this.canvas.width; c.height = this.canvas.height;
-    const g = c.getContext("2d");
-    g.scale(this.dpr, this.dpr);
-    g.globalCompositeOperation = "lighter";
-    const W = this.w, H = this.h, R = Math.max(W, H);
-    const clouds = [
-      [0.25, 0.3, 0.55, "120, 60, 255", 0.22],
-      [0.75, 0.65, 0.6, "255, 70, 180", 0.14],
-      [0.6, 0.2, 0.4, "40, 140, 255", 0.16],
-      [0.3, 0.8, 0.45, "60, 220, 255", 0.1],
-      [0.5, 0.5, 0.3, "255, 200, 150", 0.06],
-    ];
-    for (const [x, y, r, rgb, a] of clouds) {
-      const grad = g.createRadialGradient(x * W, y * H, 0, x * W, y * H, r * R);
-      grad.addColorStop(0, `rgba(${rgb}, ${a})`);
-      grad.addColorStop(0.5, `rgba(${rgb}, ${a * 0.35})`);
-      grad.addColorStop(1, `rgba(${rgb}, 0)`);
-      g.fillStyle = grad;
-      g.fillRect(0, 0, W, H);
-    }
-    this.nebula = c;
-  }
+  // arms: logarithmic spirals r = r0 * e^(b·φ), notes spaced evenly along the curve
+  const k = b / Math.sqrt(1 + b * b); // dr per unit arc length
+  let rMax = r0;
+  arms.forEach((m, a) => {
+    const theta = (2 * Math.PI * a) / A;
+    pos.set(m, { x: r0 * Math.cos(theta), y: r0 * Math.sin(theta) });
+    armOf.set(m, a);
+    along.set(m, 0);
+    const list = members.get(m);
+    list.forEach((p, i) => {
+      const r = r0 + (i + 1) * sp * k;
+      const phi = theta + Math.log(r / r0) / b;
+      // spread notes across the arm so it reads as a band, not a line
+      const [g1, g2] = gauss2(p);
+      const width = sp * 0.35 + r * 0.035;
+      const nx = Math.cos(phi), ny = Math.sin(phi);           // radial direction
+      const tx = -Math.sin(phi), ty = Math.cos(phi);          // tangent direction
+      const x = r * nx + g1 * width * nx * 0.5 + g2 * width * tx * 0.5;
+      const y = r * ny + g1 * width * ny * 0.5 + g2 * width * ty * 0.5;
+      pos.set(p, { x, y });
+      armOf.set(p, a);
+      along.set(p, list.length > 1 ? (i + 1) / list.length : 1);
+      if (r > rMax) rMax = r;
+    });
+  });
 
-  loop(t) {
-    this.raf = requestAnimationFrame(this.loop);
-    if (document.hidden || !this.w) return;
-    if (t - this.lastFrame < 33) return; // ~30fps, kind to iPad batteries
-    const s = this.plugin.settings;
-    const r = this.view.renderer;
-    const panKey = r ? `${r.panX}|${r.panY}|${r.scale}` : "";
-    const animated = s.twinkle || s.shootingStars || this.shooters.length;
-    const panned = s.parallax && panKey !== this.lastPan;
-    if (!animated && !panned && !this.dirty) return;
-    this.lastFrame = t;
-    this.lastPan = panKey;
-    this.dirty = false;
-    this.draw(t / 1000);
-  }
-
-  draw(time) {
-    const s = this.plugin.settings;
-    const ctx = this.ctx, W = this.w, H = this.h;
-    ctx.clearRect(0, 0, W, H);
-
-    if (s.nebula && this.nebula) {
-      ctx.globalAlpha = s.twinkle ? 0.85 + 0.15 * Math.sin(time * 0.25) : 1;
-      ctx.drawImage(this.nebula, 0, 0, W, H);
-    }
-
-    const r = this.view.renderer;
-    const px = s.parallax && r && isFinite(r.panX) ? r.panX : 0;
-    const py = s.parallax && r && isFinite(r.panY) ? r.panY : 0;
-
-    for (const st of this.stars) {
-      const x = (((st.x * W + px * st.d) % W) + W) % W;
-      const y = (((st.y * H + py * st.d) % H) + H) % H;
-      const a = s.twinkle ? st.a * (0.55 + 0.45 * Math.sin(time * st.sp + st.ph)) : st.a;
-      ctx.globalAlpha = a;
-      const size = st.r * 4;
-      ctx.drawImage(this.sprites[st.c], x - size / 2, y - size / 2, size, size);
-    }
-
-    if (s.shootingStars) this.drawShooters(time);
-    ctx.globalAlpha = 1;
-  }
-
-  drawShooters(time) {
-    const ctx = this.ctx, W = this.w, H = this.h;
-    if (Math.random() < 0.006 && this.shooters.length < 2) {
-      const ang = Math.PI * (0.15 + Math.random() * 0.2);
-      this.shooters.push({
-        x: Math.random() * W * 0.8, y: Math.random() * H * 0.4,
-        vx: Math.cos(ang) * (9 + Math.random() * 6),
-        vy: Math.sin(ang) * (9 + Math.random() * 6),
-        life: 1,
-      });
-    }
-    for (const sh of this.shooters) {
-      sh.x += sh.vx; sh.y += sh.vy; sh.life -= 0.025;
-      const tail = 9;
-      const grad = ctx.createLinearGradient(sh.x, sh.y, sh.x - sh.vx * tail, sh.y - sh.vy * tail);
-      grad.addColorStop(0, `rgba(255,255,255,${Math.max(0, sh.life)})`);
-      grad.addColorStop(0.3, `rgba(180,200,255,${Math.max(0, sh.life) * 0.5})`);
-      grad.addColorStop(1, "rgba(150,120,255,0)");
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = 2;
-      ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(sh.x, sh.y);
-      ctx.lineTo(sh.x - sh.vx * tail, sh.y - sh.vy * tail);
-      ctx.stroke();
-    }
-    this.shooters = this.shooters.filter((sh) => sh.life > 0 && sh.x < W + 200 && sh.y < H + 200);
-  }
-
-  refresh() {
-    this.makeStars();
-    this.dirty = true;
-  }
-
-  destroy() {
-    cancelAnimationFrame(this.raf);
-    this.ro.disconnect();
-    this.canvas.remove();
-    this.host.removeClass("galaxy-graph-host");
-  }
+  const armHue = arms.map((_, a) => (215 + a * GOLDEN_ANGLE) % 360);
+  return { pos, armOf, along, armHue, mocSet, core, r0, rMax, assign };
 }
 
 /* ---------- plugin ---------- */
 module.exports = class GalaxyGraphPlugin extends Plugin {
   async onload() {
     this.settings = Object.assign({}, DEFAULTS, await this.loadData());
-    this.starfields = new Map();
-    this.computeDegrees();
+    this.layoutVersion = 0;
+    this.galaxy = null;
+    this.hosts = new Set();
 
-    this.registerEvent(this.app.metadataCache.on("resolved", () => this.computeDegrees()));
-    this.registerInterval(window.setInterval(() => this.tick(), 400));
+    this.rebuild = debounce(() => this.computeGalaxy(), 1500, true);
+    this.registerEvent(this.app.metadataCache.on("resolved", () => this.rebuild()));
+    this.registerInterval(window.setInterval(() => this.tick(), 500));
     this.addSettingTab(new GalaxySettingTab(this.app, this));
 
     this.addCommand({
@@ -259,8 +219,16 @@ module.exports = class GalaxyGraphPlugin extends Plugin {
         await this.saveSettings();
       },
     });
+    this.addCommand({
+      id: "rearrange-galaxy",
+      name: "Re-arrange graph into galaxy",
+      callback: () => { this.computeGalaxy(); this.tick(); },
+    });
 
-    this.app.workspace.onLayoutReady(() => this.applyAll());
+    this.app.workspace.onLayoutReady(() => {
+      this.computeGalaxy();
+      this.applyAll();
+    });
   }
 
   onunload() {
@@ -269,84 +237,81 @@ module.exports = class GalaxyGraphPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
+    this.computeGalaxy();
     this.applyAll();
   }
 
+  computeGalaxy() {
+    try {
+      this.galaxy = buildGalaxy(this.app, this.settings);
+      this.layoutVersion++;
+    } catch (e) {
+      console.warn("Galaxy Graph: layout failed", e);
+    }
+  }
+
   applyAll() {
-    document.body.toggleClass("galaxy-graph-on", this.settings.enabled);
-    document.body.toggleClass("galaxy-glow", this.settings.enabled && this.settings.glow);
+    const s = this.settings;
+    document.body.toggleClass("galaxy-graph-on", s.enabled);
+    document.body.toggleClass("galaxy-bg", s.enabled && s.softBackground);
+    document.body.toggleClass("galaxy-bg-stars", s.enabled && s.softBackground && s.backgroundStars);
     this.app.workspace.trigger("css-change");
-    if (!this.settings.enabled) {
+    if (!s.enabled) {
       this.teardown(true);
       return;
     }
-    for (const sf of this.starfields.values()) sf.refresh();
-    this.tick(true);
+    if (!s.spiralLayout) for (const v of this.graphViews("graph")) this.releaseLayout(v.renderer);
+    this.tick();
   }
 
-  teardown(keepBodyClassesHandled) {
-    for (const sf of this.starfields.values()) sf.destroy();
-    this.starfields.clear();
-    for (const view of this.graphViews()) this.unpatch(view.renderer);
-    if (!keepBodyClassesHandled) {
+  teardown(keepBody) {
+    for (const v of this.graphViews()) {
+      this.unpatch(v.renderer);
+      this.releaseLayout(v.renderer);
+    }
+    for (const el of this.hosts) el.removeClass("galaxy-graph-host");
+    this.hosts.clear();
+    if (!keepBody) {
       document.body.removeClass("galaxy-graph-on");
-      document.body.removeClass("galaxy-glow");
+      document.body.removeClass("galaxy-bg");
+      document.body.removeClass("galaxy-bg-stars");
       this.app.workspace.trigger("css-change");
     }
   }
 
-  graphViews() {
+  graphViews(only) {
     const ws = this.app.workspace;
-    return [...ws.getLeavesOfType("graph"), ...ws.getLeavesOfType("localgraph")]
+    const types = only ? [only] : ["graph", "localgraph"];
+    return types.flatMap((t) => ws.getLeavesOfType(t))
       .map((l) => l.view)
       .filter((v) => v && v.contentEl);
   }
 
-  computeDegrees() {
-    const deg = new Map();
-    const links = this.app.metadataCache.resolvedLinks || {};
-    for (const src in links) {
-      for (const dst in links[src]) {
-        deg.set(src, (deg.get(src) || 0) + 1);
-        deg.set(dst, (deg.get(dst) || 0) + 1);
-      }
-    }
-    let max = 1;
-    for (const v of deg.values()) if (v > max) max = v;
-    this.degrees = deg;
-    this.maxDeg = max;
-  }
-
+  /* ----- colours ----- */
   colourFor(node) {
     const id = String(node.id || "");
-    const h = hash(id);
-    if (node.type === "tag") return hsl(320 + (h % 30), 90, 70);
-    if (node.type === "attachment") return hsl(25 + (h % 20), 95, 66);
-    if (node.type === "unresolved") return 0x565c82;
-
-    const mode = this.settings.colorMode;
-    if (mode === "rainbow") return hsl(h % 360, 88, 66);
-
-    if (mode === "folder") {
-      const folder = id.includes("/") ? id.split("/")[0] : "(root)";
-      const hue = ((hash(folder) * 0.61803398875) % 1) * 360;
-      return hsl(hue, 85, 58 + (h % 15));
+    if (node.type === "tag") return COLOURS.tag;
+    if (node.type === "attachment") return COLOURS.attachment;
+    if (node.type === "unresolved") return COLOURS.unresolved;
+    const g = this.galaxy;
+    if (!g) return COLOURS.field;
+    if (id === g.core) return COLOURS.core;
+    const a = g.armOf.get(id);
+    if (a === undefined) {
+      return g.assign.get(id) === g.core && g.core ? COLOURS.bulge : COLOURS.field;
     }
-
-    // degree: hubs glow white-gold like galactic cores, leaves are cool blue/violet
-    const d = this.degrees.get(id) || 0;
-    if (d === 0) return mix(0x7d6bd6, hsl(h % 360, 70, 70), 0.2);
-    const t = Math.log(1 + d) / Math.log(1 + this.maxDeg);
-    return mix(ramp(t), hsl(h % 360, 90, 70), 0.12);
+    const h = g.armHue[a];
+    if (g.mocSet.has(id)) return hsl(h, 70, 82);          // the MOC itself: bright
+    const t = g.along.get(id) || 0;
+    return hsl(h, 58 - 14 * t, 70 - 10 * t);               // fades gently outwards
   }
 
   patch(renderer) {
     if (!renderer || !Array.isArray(renderer.nodes)) return;
-    const plugin = this;
     let changed = false;
     for (const node of renderer.nodes) {
       const rgb = this.colourFor(node);
-      if (node.__galaxyRgb === rgb && node.__galaxyPatched) continue;
+      if (node.__galaxyPatched && node.__galaxyRgb === rgb) continue;
       node.__galaxyRgb = rgb;
       if (!node.__galaxyPatched) {
         node.__galaxyOrig = node.getFillColor;
@@ -370,7 +335,7 @@ module.exports = class GalaxyGraphPlugin extends Plugin {
     for (const node of renderer.nodes) {
       if (!node.__galaxyPatched) continue;
       delete node.getFillColor;
-      if (node.getFillColor !== node.__galaxyOrig && node.__galaxyOrig) node.getFillColor = node.__galaxyOrig;
+      if (node.__galaxyOrig && node.getFillColor !== node.__galaxyOrig) node.getFillColor = node.__galaxyOrig;
       delete node.__galaxyOrig;
       delete node.__galaxyRgb;
       delete node.__galaxyPatched;
@@ -378,28 +343,56 @@ module.exports = class GalaxyGraphPlugin extends Plugin {
     if (typeof renderer.changed === "function") renderer.changed();
   }
 
+  /* ----- layout ----- */
+  positionFor(id) {
+    const g = this.galaxy;
+    const p = g.pos.get(id);
+    if (p) return p;
+    // notes with no MOC: a faint halo scattered over the disc
+    const [u, v] = rand2(id);
+    const r = g.r0 * 0.6 + Math.sqrt(u) * (g.rMax * 1.15 - g.r0 * 0.6);
+    const a = v * Math.PI * 2;
+    return { x: r * Math.cos(a), y: r * Math.sin(a) };
+  }
+
+  applyLayout(renderer) {
+    if (!this.galaxy || !renderer || !renderer.worker || !Array.isArray(renderer.nodes)) return;
+    const key = this.layoutVersion + ":" + renderer.nodes.length;
+    if (renderer.worker.__galaxyKey === key) return;
+    renderer.worker.__galaxyKey = key;
+    for (const node of renderer.nodes) {
+      const p = this.positionFor(String(node.id));
+      renderer.worker.postMessage({ forceNode: { id: node.id, x: p.x, y: p.y } });
+      node.x = p.x;
+      node.y = p.y;
+    }
+    try { renderer.worker.postMessage({ run: true, alpha: 0.1 }); } catch (e) { /* ignore */ }
+    if (typeof renderer.changed === "function") renderer.changed();
+  }
+
+  releaseLayout(renderer) {
+    if (!renderer || !renderer.worker || !renderer.worker.__galaxyKey) return;
+    delete renderer.worker.__galaxyKey;
+    if (!Array.isArray(renderer.nodes)) return;
+    for (const node of renderer.nodes) {
+      renderer.worker.postMessage({ forceNode: { id: node.id, x: null, y: null } });
+    }
+    try { renderer.worker.postMessage({ run: true, alpha: 0.3 }); } catch (e) { /* ignore */ }
+  }
+
   tick() {
     if (!this.settings.enabled) return;
-    const views = this.graphViews();
-    const live = new Set(views);
-
-    for (const [view, sf] of this.starfields) {
-      if (!live.has(view) || !view.contentEl.isConnected || !this.settings.starfield) {
-        sf.destroy();
-        this.starfields.delete(view);
+    for (const view of this.graphViews()) {
+      if (!view.contentEl.hasClass("galaxy-graph-host")) {
+        view.contentEl.addClass("galaxy-graph-host");
+        this.hosts.add(view.contentEl);
       }
-    }
-
-    for (const view of views) {
-      try { this.patch(view.renderer); } catch (e) { console.warn("Galaxy Graph:", e); }
-      if (this.settings.starfield && !this.starfields.has(view)) {
-        this.starfields.set(view, new Starfield(this, view));
-      }
-      // make sure the graph canvas itself is see-through so space shows behind it
       try {
-        const pr = view.renderer && view.renderer.px && view.renderer.px.renderer;
-        if (pr && pr.background && pr.background.alpha !== 0) pr.background.alpha = 0;
-      } catch (e) { /* ignore */ }
+        this.patch(view.renderer);
+        if (this.settings.spiralLayout && view.getViewType() === "graph") this.applyLayout(view.renderer);
+      } catch (e) {
+        console.warn("Galaxy Graph:", e);
+      }
     }
   }
 };
@@ -413,36 +406,46 @@ class GalaxySettingTab extends PluginSettingTab {
   display() {
     const { containerEl } = this;
     const s = this.plugin.settings;
+    const save = () => this.plugin.saveSettings();
     containerEl.empty();
 
     const toggle = (name, desc, key) =>
       new Setting(containerEl).setName(name).setDesc(desc).addToggle((t) =>
-        t.setValue(s[key]).onChange(async (v) => { s[key] = v; await this.plugin.saveSettings(); })
+        t.setValue(s[key]).onChange(async (v) => { s[key] = v; await save(); })
       );
 
     toggle("Enabled", "Turn the galaxy theme on or off.", "enabled");
+    toggle("Spiral galaxy layout", "Arrange the global graph into spiral arms, one per MOC. Turn off to let notes float freely again.", "spiralLayout");
 
+    new Setting(containerEl).setHeading().setName("MOCs");
     new Setting(containerEl)
-      .setName("Node colours")
-      .setDesc("Connections: hubs burn white-gold, loose notes are blue/violet. Folder: one colour per top-level folder. Rainbow: every note its own colour.")
-      .addDropdown((d) =>
-        d.addOptions({ degree: "By connections (galaxy core)", folder: "By folder", rainbow: "Rainbow" })
-          .setValue(s.colorMode)
-          .onChange(async (v) => { s.colorMode = v; await this.plugin.saveSettings(); })
-      );
-
-    toggle("Starfield", "Stars behind the graph.", "starfield");
-    toggle("Nebula clouds", "Purple, pink and blue gas clouds.", "nebula");
-    toggle("Twinkle", "Animate the stars. Turn off to save battery.", "twinkle");
-    toggle("Shooting stars", "Occasional meteors.", "shootingStars");
-    toggle("Parallax", "Stars drift slightly as you pan the graph.", "parallax");
-    toggle("Glow", "Bloom around nodes. Can be slow on very large graphs.", "glow");
-
+      .setName("MOC name contains")
+      .setDesc("Notes whose name contains this text count as MOCs. Leave blank to ignore names.")
+      .addText((t) => t.setValue(s.mocText).onChange(async (v) => { s.mocText = v; await save(); }));
     new Setting(containerEl)
-      .setName("Star density")
-      .addSlider((sl) =>
-        sl.setLimits(0.2, 3, 0.1).setValue(s.starDensity).setDynamicTooltip()
-          .onChange(async (v) => { s.starDensity = v; await this.plugin.saveSettings(); })
-      );
+      .setName("MOC tag")
+      .setDesc("Notes with this tag also count as MOCs (without the #).")
+      .addText((t) => t.setValue(s.mocTag).onChange(async (v) => { s.mocTag = v; await save(); }));
+    new Setting(containerEl)
+      .setName("Fallback hubs")
+      .setDesc("If no MOCs are found, use this many of your most-linked notes as arms instead.")
+      .addSlider((sl) => sl.setLimits(2, 16, 1).setValue(s.autoHubs).setDynamicTooltip()
+        .onChange(async (v) => { s.autoHubs = v; await save(); }));
+
+    new Setting(containerEl).setHeading().setName("Shape");
+    new Setting(containerEl)
+      .setName("Spiral tightness")
+      .setDesc("Lower winds the arms more tightly.")
+      .addSlider((sl) => sl.setLimits(0.12, 0.6, 0.02).setValue(s.tightness).setDynamicTooltip()
+        .onChange(async (v) => { s.tightness = v; await save(); }));
+    new Setting(containerEl)
+      .setName("Spacing")
+      .setDesc("Distance between notes along an arm.")
+      .addSlider((sl) => sl.setLimits(8, 40, 1).setValue(s.spacing).setDynamicTooltip()
+        .onChange(async (v) => { s.spacing = v; await save(); }));
+
+    new Setting(containerEl).setHeading().setName("Background");
+    toggle("Soft space background", "A calm dark-blue background behind the graph.", "softBackground");
+    toggle("Faint stars", "A few dim, still stars in the background.", "backgroundStars");
   }
 }
