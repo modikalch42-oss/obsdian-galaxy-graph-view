@@ -1,0 +1,13 @@
+{
+  "name": "galaxy-graph-dev",
+  "private": true,
+  "description": "Test harness for the Galaxy Graph Obsidian plugin: a simulator of Obsidian's graph view plus behaviour and layout tests.",
+  "scripts": {
+    "test": "node tests.js",
+    "fuzz": "node fuzz.js"
+  },
+  "devDependencies": {
+    "pixi.js": "7.4.3",
+    "playwright": "^1.50.0"
+  }
+}

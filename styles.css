@@ -1,13 +1,14 @@
 /* ---------- Galaxy Graph ---------- */
-/* Everything here is static CSS: no animation, no filters, nothing redrawn per frame. */
+/* Everything here is still: no animations, no filters, nothing redrawn per frame. */
 
+/* ---- background: plain, dark and soft ---- */
 body.galaxy-graph-on.galaxy-bg .galaxy-graph-host {
   position: relative;
   isolation: isolate;
-  background: radial-gradient(ellipse at center, #1b1a2e 0%, #141322 55%, #0e0d18 100%) !important;
+  background: radial-gradient(120% 95% at 50% 46%, #14132a 0%, #0e0d1c 52%, #08080f 100%) !important;
 }
 
-/* a few dim, still stars */
+/* a few dim, still stars; two tile sizes so the pattern never visibly repeats */
 body.galaxy-graph-on.galaxy-bg-stars .galaxy-graph-host::before {
   content: "";
   position: absolute;
@@ -16,19 +17,147 @@ body.galaxy-graph-on.galaxy-bg-stars .galaxy-graph-host::before {
   pointer-events: none;
   opacity: 0.5;
   background-image:
-    radial-gradient(1px 1px at 12% 18%, rgba(255, 255, 255, 0.55), transparent),
-    radial-gradient(1px 1px at 37% 72%, rgba(220, 225, 255, 0.45), transparent),
-    radial-gradient(1px 1px at 64% 33%, rgba(255, 245, 225, 0.45), transparent),
-    radial-gradient(1px 1px at 81% 81%, rgba(255, 255, 255, 0.4), transparent),
-    radial-gradient(1.5px 1.5px at 90% 12%, rgba(230, 230, 255, 0.5), transparent),
-    radial-gradient(1px 1px at 22% 55%, rgba(255, 255, 255, 0.35), transparent),
-    radial-gradient(1px 1px at 52% 92%, rgba(255, 240, 230, 0.35), transparent);
-  background-size: 340px 340px;
+    radial-gradient(1px 1px at 41px 63px, rgba(255, 255, 255, 0.5), transparent),
+    radial-gradient(1px 1px at 137px 211px, rgba(214, 222, 255, 0.4), transparent),
+    radial-gradient(1px 1px at 233px 97px, rgba(255, 244, 226, 0.4), transparent),
+    radial-gradient(1.4px 1.4px at 289px 301px, rgba(230, 232, 255, 0.45), transparent),
+    radial-gradient(1px 1px at 83px 277px, rgba(255, 255, 255, 0.3), transparent),
+    radial-gradient(1px 1px at 59px 131px, rgba(255, 255, 255, 0.35), transparent),
+    radial-gradient(1px 1px at 197px 389px, rgba(214, 222, 255, 0.35), transparent),
+    radial-gradient(1.4px 1.4px at 353px 73px, rgba(255, 244, 226, 0.4), transparent),
+    radial-gradient(1px 1px at 419px 251px, rgba(255, 255, 255, 0.3), transparent);
+  background-size:
+    331px 331px, 331px 331px, 331px 331px, 331px 331px, 331px 331px,
+    457px 457px, 457px 457px, 457px 457px, 457px 457px;
 }
 
-/* gentle colours Obsidian reads for links, labels and highlights */
-body.galaxy-graph-on .graph-view.color-line { color: rgba(170, 175, 220, 0.14); }
-body.galaxy-graph-on .graph-view.color-line-highlight { color: rgba(220, 215, 255, 0.6); }
-body.galaxy-graph-on .graph-view.color-text { color: #d8daf0; }
-body.galaxy-graph-on .graph-view.color-arrow { color: rgba(170, 175, 220, 0.4); }
-body.galaxy-graph-on .graph-view.color-circle { color: #f3e6c8; }
+/* ---- colours Obsidian reads for link lines, labels and highlights ---- */
+/* On the plugin's own dark background, and on any dark theme. */
+body.galaxy-graph-on.galaxy-bg .graph-view.color-line,
+body.galaxy-graph-on.theme-dark .graph-view.color-line { color: rgba(170, 178, 230, var(--galaxy-line-alpha, 0.09)); }
+body.galaxy-graph-on.galaxy-bg .graph-view.color-arrow,
+body.galaxy-graph-on.theme-dark .graph-view.color-arrow { color: rgba(170, 178, 230, calc(var(--galaxy-line-alpha, 0.09) * 2.5)); }
+body.galaxy-graph-on.galaxy-bg .graph-view.color-line-highlight,
+body.galaxy-graph-on.theme-dark .graph-view.color-line-highlight { color: rgba(228, 224, 255, 0.72); }
+body.galaxy-graph-on.galaxy-bg .graph-view.color-text,
+body.galaxy-graph-on.theme-dark .graph-view.color-text { color: #dcdff5; }
+body.galaxy-graph-on.galaxy-bg .graph-view.color-circle,
+body.galaxy-graph-on.theme-dark .graph-view.color-circle { color: #fff1cf; }
+body.galaxy-graph-on.galaxy-bg .graph-view.color-fill-highlight,
+body.galaxy-graph-on.theme-dark .graph-view.color-fill-highlight { color: #ffffff; }
+
+/* A light theme with the plugin's background switched off keeps the theme's own text and highlight
+   colours; only the link lines are quietened, so the "Link lines" setting still works. */
+body.galaxy-graph-on.theme-light:not(.galaxy-bg) .graph-view.color-line { color: rgba(72, 76, 122, var(--galaxy-line-alpha, 0.09)); }
+body.galaxy-graph-on.theme-light:not(.galaxy-bg) .graph-view.color-arrow { color: rgba(72, 76, 122, calc(var(--galaxy-line-alpha, 0.09) * 2.5)); }
+
+/* ---- the MOC list ---- */
+.galaxy-legend {
+  position: absolute;
+  left: 12px;
+  bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 132px;
+  max-width: min(230px, 48%);
+  max-height: 48%;
+  font-size: 12px;
+  line-height: 1.25;
+  color: #d9dcf2;
+  background: rgba(13, 12, 26, 0.72);
+  border: 1px solid rgba(160, 166, 222, 0.16);
+  border-radius: 10px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.galaxy-legend-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 5px 5px 11px;
+}
+.galaxy-legend-title {
+  flex: 1;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(205, 210, 245, 0.62);
+}
+.galaxy-legend-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 6px;
+  color: rgba(205, 210, 245, 0.7);
+  cursor: pointer;
+}
+.galaxy-legend-btn svg { width: 14px; height: 14px; }
+.galaxy-legend-list {
+  overflow-y: auto;
+  padding: 0 4px 5px;
+}
+.galaxy-legend.is-collapsed .galaxy-legend-list { display: none; }
+.galaxy-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.galaxy-legend-item:hover { background: rgba(255, 255, 255, 0.06); }
+.galaxy-legend-item.is-active { background: rgba(255, 255, 255, 0.13); }
+.galaxy-legend-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.galaxy-legend-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.galaxy-legend-count {
+  flex: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(205, 210, 245, 0.5);
+}
+
+/* ---- the on/off button: there whether the galaxy is on or off ---- */
+.galaxy-switch-host { position: relative; }
+.galaxy-switch {
+  position: absolute;
+  left: 12px;
+  top: 12px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px 0 9px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: 15px;
+  color: var(--text-muted, #9a9a9a);
+  background: var(--background-secondary, rgba(128, 128, 128, 0.16));
+  border: 1px solid var(--background-modifier-border, rgba(128, 128, 128, 0.28));
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.galaxy-switch-icon { display: flex; align-items: center; }
+.galaxy-switch svg { width: 15px; height: 15px; }
+.galaxy-switch.is-on {
+  color: #e9e6ff;
+  background: rgba(46, 42, 92, 0.78);
+  border-color: rgba(170, 160, 255, 0.36);
+}

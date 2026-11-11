@@ -1,9 +1,9 @@
 {
   "id": "galaxy-graph",
   "name": "Galaxy Graph",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "minAppVersion": "1.4.0",
-  "description": "Arranges the graph view into a spiral galaxy, with each MOC as its own coloured arm, on a calm space background.",
+  "description": "Arranges the graph view into a spiral galaxy: one coloured arm per MOC, a bright core, a soft glow and a calm space background.",
   "author": "Modi",
   "isDesktopOnly": false
 }
